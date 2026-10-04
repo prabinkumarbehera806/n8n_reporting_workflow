@@ -462,4 +462,8 @@ automated-sales-reporting/
 
 **Don't let unverified AI output reach the stakeholder.**
 
+<<<<<<< HEAD
 **And don't automate decisions that require human context.**
+=======
+**And don't automate decisions that require human context.**
+>>>>>>> 5b4b18617800fb983ccecd7c64060606b284e671

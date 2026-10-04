@@ -1,0 +1,498 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        -128
+      ],
+      "id": "5c9e5746-d915-4909-8df4-891d90b37209",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "fileSelector": "/files/automated_reporting_sales.csv",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -240,
+        -128
+      ],
+      "id": "b905f5ca-2e91-40ac-babd-a4199dd215fc",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        -128
+      ],
+      "id": "54f43532-5c12-41e0-8c74-d42ddf81d836",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const current = items[i].json;\n\n  const historical = items\n    .slice(0, i)\n    .map(item => Number(item.json.revenue));\n\n  let baseline_avg = null;\n  let baseline_std = null;\n  let z_score = null;\n  let anomaly = false;\n\n  if (historical.length >= 2) {\n    baseline_avg =\n      historical.reduce((sum, value) => sum + value, 0) /\n      historical.length;\n\n    const variance =\n      historical.reduce(\n        (sum, value) => sum + Math.pow(value - baseline_avg, 2),\n        0\n      ) / historical.length;\n\n    baseline_std = Math.sqrt(variance);\n\n    if (baseline_std > 0) {\n      z_score =\n        (Number(current.revenue) - baseline_avg) /\n        baseline_std;\n\n      anomaly = Math.abs(z_score) > 2;\n    }\n  }\n\n  results.push({\n    json: {\n      ...current,\n      baseline_avg:\n        baseline_avg === null\n          ? null\n          : Math.round(baseline_avg * 100) / 100,\n\n      baseline_std:\n        baseline_std === null\n          ? null\n          : Math.round(baseline_std * 100) / 100,\n\n      z_score:\n        z_score === null\n          ? null\n          : Math.round(z_score * 100) / 100,\n\n      anomaly\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -224
+      ],
+      "id": "468050b0-0ac7-464e-9003-782eee04c778",
+      "name": "Validate — Historical Baseline"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst orderCounts = {};\n\nfor (const item of items) {\n  const orderId = String(item.json.order_id).trim();\n\n  orderCounts[orderId] = (orderCounts[orderId] || 0) + 1;\n}\n\nreturn items.map(item => {\n  const row = item.json;\n  const issues = [];\n\n  // Missing customer ID\n  if (!row.customer_id || String(row.customer_id).trim() === '') {\n    issues.push('Missing customer ID');\n  }\n\n  // Invalid date\n  const date = new Date(row.order_date);\n\n  if (isNaN(date.getTime())) {\n    issues.push('Invalid order date');\n  }\n\n  // Revenue validation\n  const revenue = Number(row.revenue);\n\n  if (isNaN(revenue)) {\n    issues.push('Invalid revenue');\n  } else if (revenue < 0) {\n    issues.push('Negative revenue');\n  }\n\n  // Duplicate order ID\n  const orderId = String(row.order_id).trim();\n\n  if (orderCounts[orderId] > 1) {\n    issues.push('Duplicate order ID');\n  }\n\n  // Missing product ID\n  if (!row.product_id || String(row.product_id).trim() === '') {\n    issues.push('Missing product ID');\n  }\n\n  return {\n    json: {\n      ...row,\n      valid: issues.length === 0,\n      issues\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -128
+      ],
+      "id": "901d9355-173f-4bde-b1db-012399607b0a",
+      "name": "Validate — Data Quality"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst weeks = items\n  .map(item => item.json)\n  .sort((a, b) => a.week.localeCompare(b.week));\n\n// We need at least 2 weeks for week-over-week comparison\nif (weeks.length < 2) {\n  return [\n    {\n      json: {\n        status: 'INSUFFICIENT_DATA',\n        message: 'Not enough weekly data to perform the analysis.',\n        weeks_available: weeks.length\n      }\n    }\n  ];\n}\n\nconst latest = weeks[weeks.length - 1];\nconst previous = weeks[weeks.length - 2];\n\n// Previous week's revenue\nconst previousRevenue = Number(previous.revenue);\n\n// Order growth\nconst orderGrowth =\n  Number(previous.orders) > 0\n    ? ((Number(latest.orders) - Number(previous.orders)) /\n        Number(previous.orders)) * 100\n    : null;\n\n// Historical revenue\nconst historicalRevenues = weeks\n  .slice(0, -1)\n  .map(week => Number(week.revenue));\n\nconst historicalAverage =\n  historicalRevenues.reduce((sum, value) => sum + value, 0) /\n  historicalRevenues.length;\n\n// Compare latest week against historical average\nconst vsHistoricalAverage =\n  ((Number(latest.revenue) - historicalAverage) /\n    historicalAverage) * 100;\n\n// Observations\nconst observations = [];\n\nif (latest.anomaly) {\n  observations.push(\n    `Revenue is significantly outside the historical baseline (z-score: ${latest.z_score}).`\n  );\n}\n\nif (\n  latest.revenue_growth !== null &&\n  latest.revenue_growth > 0\n) {\n  observations.push(\n    `Revenue increased ${latest.revenue_growth}% compared with the previous week.`\n  );\n} else if (\n  latest.revenue_growth !== null &&\n  latest.revenue_growth < 0\n) {\n  observations.push(\n    `Revenue decreased ${Math.abs(latest.revenue_growth)}% compared with the previous week.`\n  );\n}\n\nif (orderGrowth > 0) {\n  observations.push(\n    `Orders increased ${Math.round(orderGrowth * 100) / 100}% compared with the previous week.`\n  );\n} else if (orderGrowth < 0) {\n  observations.push(\n    `Orders decreased ${Math.abs(Math.round(orderGrowth * 100) / 100)}% compared with the previous week.`\n  );\n}\n\nif (vsHistoricalAverage > 0) {\n  observations.push(\n    `Revenue is ${Math.round(vsHistoricalAverage * 100) / 100}% above the historical average.`\n  );\n} else {\n  observations.push(\n    `Revenue is ${Math.abs(Math.round(vsHistoricalAverage * 100) / 100)}% below the historical average.`\n  );\n}\n\nreturn [\n  {\n    json: {\n      status: 'SUCCESS',\n      week: latest.week,\n      revenue: Number(latest.revenue),\n      orders: Number(latest.orders),\n      previous_revenue: previousRevenue,\n\n      revenue_growth:\n        latest.revenue_growth,\n\n      order_growth:\n        orderGrowth === null\n          ? null\n          : Math.round(orderGrowth * 100) / 100,\n\n      historical_average:\n        Math.round(historicalAverage * 100) / 100,\n\n      vs_historical_average:\n        Math.round(vsHistoricalAverage * 100) / 100,\n\n      baseline_avg: latest.baseline_avg,\n      baseline_std: latest.baseline_std,\n      z_score: latest.z_score,\n      anomaly: latest.anomaly,\n\n      observations\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -224
+      ],
+      "id": "e89719af-c85e-4288-8ea0-999b7ed25868",
+      "name": "Analyst — Weekly Insights"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a business reporting assistant.\n\nWrite a concise weekly sales summary for a business stakeholder using the exact units and formatting provided in the input.\n\nSTRICT RULES:\n1. Use ONLY the facts provided in the input.\n2. Do not invent, estimate, or calculate any new numbers.\n3. Do not introduce figures that are not present in the input.\n4. If a value is missing, do not guess it.\n5. Mention the anomaly if anomaly is true.\n6. Keep the summary to 3-4 sentences.\n7. Use a professional business tone.\n8. Do not add currency symbols or units unless they are explicitly provided in the input.\n\nVerified weekly analysis:\n\n{{ JSON.stringify($json) }}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1552,
+        -224
+      ],
+      "id": "0e190b36-60cc-4f17-a9a0-f7fa60b82d4b",
+      "name": "Narrator — Weekly Summary"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-flash-lite-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1624,
+        8
+      ],
+      "id": "8c7209ad-9e75-440e-a0ab-b200ede1247e",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "opi5U94zskadaxde",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $json.text;\n\n// Verified values from the Analyst\nconst revenue = Number($('Analyst — Weekly Insights').item.json.revenue);\nconst revenueGrowth = Number($('Analyst — Weekly Insights').item.json.revenue_growth);\nconst zScore = Number($('Analyst — Weekly Insights').item.json.z_score);\nconst historicalAverage = Number(\n  $('Analyst — Weekly Insights').item.json.historical_average\n);\n\n// Check whether the generated text contains the verified values\nconst checks = {\n  revenue: text.includes(String(revenue)),\n  revenue_growth: text.includes(String(revenueGrowth)),\n  z_score: text.includes(String(zScore)),\n  historical_average: text.includes(String(historicalAverage))\n};\n\nconst passed = Object.values(checks).every(Boolean);\n\nreturn {\n  json: {\n    narration: text,\n    quality_check: passed ? 'PASS' : 'FAIL',\n    checks\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1904,
+        -224
+      ],
+      "id": "625289d5-2a83-462f-b593-5e93e6ac9614",
+      "name": "Quality Gate — Numeric Check"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nif (data.quality_check !== 'PASS') {\n  return [];\n}\n\nconst analyst = $('Analyst — Weekly Insights').item.json;\n\nconst powerBIUrl = 'https://app.powerbi.com/links/k1jO83FdAu?ctid=c161ec3a-f23b-463b-823e-79329dc7b3f9&pbi_source=linkShare';\n\nreturn {\n  json: {\n    report_message:\n      `Weekly Sales Report — ${analyst.week}\\n\\n` +\n      `${data.narration}\\n\\n` +\n      `Quality Check: PASS\\n\\n` +\n      `Power BI Report: ${powerBIUrl}`\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2128,
+        -224
+      ],
+      "id": "95fe7ca9-37a9-4e3a-9fee-2f53892f2f6e",
+      "name": "Report — Final Message"
+    },
+    {
+      "parameters": {
+        "fromEmail": "prabinkumarbehera.ldmgap@gmail.com",
+        "toEmail": "da.prabinkumar@gmail.com",
+        "subject": "This Week's Report",
+        "emailFormat": "text",
+        "text": "={{ $('Report — Final Message').item.json.report_message }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2352,
+        -224
+      ],
+      "id": "7bbd7d78-23d7-4fea-be0a-a8ca75e7be61",
+      "name": "Send an Email",
+      "webhookId": "452f3a3a-a00d-43b6-84ae-d80f7efb71e0",
+      "credentials": {
+        "smtp": {
+          "id": "cMszcJhj8ABozByS",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -464,
+        192
+      ],
+      "id": "78cd3313-9f4b-41f4-a92f-a93c5ab9dc26",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst invalidRows = items.filter(\n  item => item.json.valid === false\n);\n\nconst issueCounts = {};\n\nfor (const item of invalidRows) {\n  for (const issue of item.json.issues || []) {\n    issueCounts[issue] = (issueCounts[issue] || 0) + 1;\n  }\n}\n\nconst issueSummary = Object.entries(issueCounts)\n  .map(([issue, count]) => `${issue}: ${count}`)\n  .join('\\n');\n\nreturn [\n  {\n    json: {\n      status: 'DATA_QUALITY_FAILED',\n      invalid_records: invalidRows.length,\n      issue_summary: issueSummary,\n      message:\n        `Data quality validation failed. ` +\n        `${invalidRows.length} invalid record(s) detected.\\n\\n` +\n        issueSummary\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        -32
+      ],
+      "id": "76ee5139-3cd6-4c09-9e80-ea35e649ea1f",
+      "name": "Report — Data Quality Issues"
+    },
+    {
+      "parameters": {
+        "fromEmail": "prabinkumarbehera.ldmgap@gmail.com",
+        "toEmail": "da.prabinkumar@gmail.com",
+        "subject": "Data Quality Validation Failed",
+        "emailFormat": "text",
+        "text": "={{ $json.message }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        -32
+      ],
+      "id": "fa5c2423-8eb8-425b-b84a-c2ebc2cc9ee4",
+      "name": "Send an Email1",
+      "webhookId": "7a728ee2-ba8d-4730-94f2-c4767ffa6b37",
+      "credentials": {
+        "smtp": {
+          "id": "cMszcJhj8ABozByS",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst weekly = {};\n\nfor (const item of items) {\n  const date = new Date(item.json.order_date);\n  const revenue = Number(item.json.revenue);\n\n  const day = date.getUTCDay();\n  const daysFromMonday = day === 0 ? 6 : day - 1;\n\n  date.setUTCDate(date.getUTCDate() - daysFromMonday);\n\n  const week = date.toISOString().split('T')[0];\n\n  if (!weekly[week]) {\n    weekly[week] = {\n      week,\n      revenue: 0,\n      orders: 0\n    };\n  }\n\n  weekly[week].revenue += revenue;\n  weekly[week].orders += 1;\n}\n\nconst results = Object.values(weekly).sort(\n  (a, b) => a.week.localeCompare(b.week)\n);\n\nreturn results.map((current, index) => {\n  const previous = results[index - 1];\n\n  const revenueGrowth = previous\n    ? ((current.revenue - previous.revenue) / previous.revenue) * 100\n    : null;\n\n  return {\n    json: {\n      week: current.week,\n      revenue: Math.round(current.revenue * 100) / 100,\n      orders: current.orders,\n      revenue_growth: revenueGrowth === null\n        ? null\n        : Math.round(revenueGrowth * 100) / 100\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        -224
+      ],
+      "id": "2e58c6de-528e-4ccb-a6b3-d518f3307121",
+      "name": "Calculate — Weekly KPIs"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "264db4cd-6ae4-42a2-825e-284324d5778c",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "SUCCESS",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1328,
+        -224
+      ],
+      "id": "f98c79b6-1784-4235-84d7-0e2513e8f61c",
+      "name": "IF — Sufficient Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "93f18ff7-38c1-43e7-a436-9e484add3a33",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        432,
+        -128
+      ],
+      "id": "ee4b78c6-0371-4b31-9971-3b2d96d77ecc",
+      "name": "IF — Data Quality"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Validate — Data Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate — Historical Baseline": {
+      "main": [
+        [
+          {
+            "node": "Analyst — Weekly Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate — Data Quality": {
+      "main": [
+        [
+          {
+            "node": "IF — Data Quality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyst — Weekly Insights": {
+      "main": [
+        [
+          {
+            "node": "IF — Sufficient Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Narrator — Weekly Summary": {
+      "main": [
+        [
+          {
+            "node": "Quality Gate — Numeric Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Narrator — Weekly Summary",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Gate — Numeric Check": {
+      "main": [
+        [
+          {
+            "node": "Report — Final Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report — Final Message": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        []
+      ]
+    },
+    "Report — Data Quality Issues": {
+      "main": [
+        [
+          {
+            "node": "Send an Email1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email1": {
+      "main": [
+        []
+      ]
+    },
+    "Calculate — Weekly KPIs": {
+      "main": [
+        [
+          {
+            "node": "Validate — Historical Baseline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Sufficient Data": {
+      "main": [
+        [
+          {
+            "node": "Narrator — Weekly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF — Data Quality": {
+      "main": [
+        [
+          {
+            "node": "Calculate — Weekly KPIs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report — Data Quality Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "003c6c05-4648-4614-a6cd-ef72bb269e8b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b28287a43c7c68db7069b1cabab2c2caf50500af435fbe68332565add3ba279c"
+  },
+  "nodeGroups": [],
+  "id": "iaPAWDEc8oGoxYYB",
+  "tags": []
+}

@@ -1,469 +1,128 @@
-# Automated Weekly Sales Reporting & Exception Monitoring
+# Automated Weekly Sales Report
 
-> Turning repetitive reporting work into a controlled workflow — while keeping business decisions under human control.
+An n8n workflow that does the boring parts of a weekly sales report, flags numbers that look off, and emails the result. A human still decides what the numbers mean.
 
-## Executive Summary
+The data is synthetic: 1,200 made-up orders over 12 weeks, generated for this project.
 
-Weekly sales reporting repeats the same work: collecting data, checking quality, calculating KPIs, comparing performance with historical results, identifying unusual movements, writing a summary, and distributing the report.
+## The problem
 
-This project automates those repeatable steps while keeping **analysis, validation, and business decisions separated**.
+Picture an analyst on a Monday morning. Same routine every week. Pull the data, check it isn't broken, work out revenue and orders, compare with the weeks before, see if anything looks strange, write a few paragraphs for the boss, send it.
 
-The workflow processes **1,200 sales transactions across 12 weeks**, detects unusual revenue movements, generates stakeholder-friendly commentary, validates the generated numbers, and delivers the final report by email.
+None of it is hard. It's just the same thing, every week, and that's exactly where people skip a check or mistype a number.
 
-### Key Results
-
-| Metric | Result |
-|---|---:|
-| Transactions processed | **1,200** |
-| Reporting period | **12 weeks** |
-| Latest weekly revenue growth | **+20.7%** |
-| Latest revenue z-score | **3.51** |
-| Data-quality edge cases detected | **5** |
-| Incorrect AI output blocked during testing | **1** |
-
----
-
-## The Business Problem
-
-The problem is not that weekly reporting is technically difficult.
-
-The problem is that **the same work has to be repeated every week**.
-
-```text
-Collect Data → Check Data → Calculate KPIs → Compare Performance
-→ Detect Exceptions → Write Report → Send Report
-```
-
-Repeating this process creates opportunities for inconsistent calculations, missed data-quality issues, delayed reporting, repetitive analyst work, and reporting mistakes.
-
-The goal was not to **automate everything**.
-
-The goal was to identify **which parts should be automated, which parts should remain deterministic, and where human judgment is still necessary.**
-
----
-
-## What Should Be Automated?
-
-Good candidates are repetitive, rule-based, predictable, and easy to validate:
-
-- Data ingestion
-- Data-quality validation
-- KPI calculations
-- Historical comparisons
-- Anomaly detection
-- Report formatting
-- Drafting repetitive commentary
-- Numerical validation
-- Report distribution
-
-### What Should Remain Human-Led?
-
-The system can determine:
-
-> Revenue increased 20.7% and is outside the historical baseline.
-
-But it should **not automatically decide**:
-
-> Increase marketing spending by 20%.
-
-A human may need to investigate promotions, pricing changes, large customer orders, seasonality, product launches, or data issues.
-
-**Principle: Automate the repeatable work. Keep judgment where context is required.**
-
----
-
-## How the Workflow Works
+So I asked myself one question: which of these steps can a machine do safely, and which ones need a person?
 
 ![Workflow Overview](docs/images/n8n-workflow.png)
 
-```text
-Raw Sales Data
-      ↓
-Data Quality Validation
-      ↓
-Weekly KPI Calculation
-      ↓
-Historical Baseline
-      ↓
-Anomaly Detection
-      ↓
-AI-Generated Commentary
-      ↓
-Numeric Quality Check
-      ↓
-Email Report
-```
+## How it works
 
-Each stage has one primary responsibility, making it easier to identify failures and prevent bad output from moving downstream.
+**1. It checks the data first.**
+Before any maths, it looks for missing customer IDs, missing product IDs, bad dates, negative revenue and duplicate order IDs. If something fails, the workflow stops and sends a data-quality report instead. No point calculating KPIs on broken data.
 
----
-
-## 1. Validate the Data
-
-Before calculating anything, the workflow checks for:
-
-- Missing customer IDs
-- Invalid dates
-- Negative revenue
-- Duplicate order IDs
-- Missing product IDs
-
-If validation fails, analysis does not continue. A separate data-quality report is generated instead.
-
-### Edge-Case Test
-
-An intentionally corrupted dataset contained:
-
-- 1 negative revenue record
-- 1 missing customer ID
-- 2 duplicate order records
-- 1 invalid date
-
-The workflow detected all **5 invalid records**.
+To test this, I made a dirty file with 5 planted problems: 1 negative revenue row, 1 missing customer ID, 2 duplicate orders and 1 bad date. It caught all five.
 
 ![Data Quality Validation](docs/images/data-quality-validation.png)
 
----
-
-## 2. Calculate Weekly Performance
-
-Validated transactions are grouped into weekly reporting periods.
-
-The workflow calculates:
-
-- Revenue
-- Order count
-- Week-over-week revenue growth
-- Week-over-week order growth
-- Historical average revenue
-
-For the latest week:
-
-| Metric | Value |
-|---|---:|
-| Revenue | **287,813.93** |
-| Orders | **100** |
-| Revenue growth | **+20.7%** |
+**2. It does the weekly maths.**
+Revenue, order count, week-over-week growth. For the latest week that's 287,813.93 in revenue from 100 orders, up 20.7%.
 
 ![Weekly KPI Analysis](docs/images/weekly-kpi-analysis.png)
 
----
+**3. It flags anything unusual.**
+It compares the latest week against the average of the earlier weeks using a z-score. Latest revenue was 287,813.93. The average was 243,086.45. That gives a z-score of 3.51. My threshold is 2, so the week gets flagged as an anomaly. (The average only uses the weeks before the latest one, so the current week can't distort its own baseline.)
 
-## 3. Detect Unusual Performance
-
-The latest week is compared against the historical revenue baseline.
-
-```text
-Z-score = (Current Revenue - Historical Average)
-          / Historical Standard Deviation
-```
-
-For the latest week:
-
-```text
-Historical average: 243,086.45
-Latest revenue:     287,813.93
-Z-score:                  3.51
-```
-
-Using the project's configurable threshold of `|z| > 2`, the week is flagged as:
-
-> **ANOMALY DETECTED**
-
-An anomaly tells the analyst **where to look**. It does not explain why it happened.
+A flag only says "look here". It doesn't say why. Maybe a promotion, maybe one huge order, maybe a data problem. That part is for a person to find out.
 
 ![Anomaly Detection](docs/images/anomaly-detection.png)
 
----
-
-## 4. Use AI for Communication — Not Truth
-
-Once analytical results are verified, Gemini turns them into concise stakeholder-friendly commentary.
-
-```text
-Deterministic Analytics
-        ↓
-Verified Metrics
-        ↓
-Gemini
-        ↓
-Business Commentary
-```
-
-The LLM is **not the source of truth**. It is a communication layer.
+**4. Gemini writes the summary.**
+Once the numbers are confirmed, they go to Gemini, which turns them into a short, plain-English note for stakeholders. The numbers come from code. Gemini only does the wording.
 
 ![AI Narration](docs/images/ai-narration.png)
 
----
+**5. The numbers get checked again before sending.**
+LLMs sometimes get numbers wrong, even when you hand them the right ones. So a plain JavaScript check compares revenue, growth, the historical average and the z-score in Gemini's text against the real values.
 
-## 5. Verify the AI Output
-
-AI-generated text can contain incorrect numbers even when the underlying analysis is correct.
-
-A deterministic quality gate checks important figures in the generated commentary:
-
-- Revenue
-- Revenue growth
-- Historical average
-- Z-score
-
-During testing, I intentionally instructed the AI to report:
-
-```text
-999999.99
-```
-
-instead of the verified revenue.
-
-The quality gate detected the mismatch:
-
-```text
-QUALITY CHECK: FAIL
-```
-
-The report was prevented from reaching the final publishing stage.
-
-> **Don't let unverified AI output become a business report.**
-
-*Note: this is a numerical consistency check, not a complete semantic fact-checking system.*
+To test it, I told Gemini to report revenue as 999999.99. The check caught it, returned `QUALITY CHECK: FAIL`, and the report never went out. This only catches wrong numbers. It can't tell if the wording is misleading.
 
 ![AI Quality Gate](docs/images/quality-gate.png)
 
----
+**6. The report lands in your inbox.**
+Over SMTP, with the summary and the flagged anomaly.
 
-## What Happens When Something Goes Wrong?
+<!-- ADD: screenshot of the real email here, docs/images/email-report.png -->
 
-| Situation | System Response |
+## What the workflow does NOT do
+
+It never decides what to do about a spike. "Revenue is up 20.7% and outside the normal range" is something it can say. "Spend 20% more on marketing" is not. Someone has to check pricing, promotions, big customers, seasonality and data issues first.
+
+Humans still own: why the numbers moved, what to do about it, and any change to the rules.
+
+## How much time does it save?
+
+I don't have a production baseline, so this is an estimate, not a measurement. Here's my guess at what a manual weekly e-commerce report takes:
+
+| Step | Minutes |
+|---|---:|
+| Pull the data | 20 |
+| Check data quality | 30 |
+| Calculate KPIs | 30 |
+| Compare with previous weeks | 20 |
+| Spot unusual numbers | 15 |
+| Write the summary | 30 |
+| Double-check numbers and formatting | 15 |
+| Send the email | 5 |
+| **Total** | **165 (about 2h 45m)** |
+
+With the workflow, the analyst only reads the report and looks into any flag. I'd say 15 minutes.
+
+That's about **2.5 hours saved per week**, roughly **130 hours a year**, or around 16 working days. Change the numbers to match your own team and the maths still works.
+
+## "Couldn't a template write that summary?"
+
+Yes, for four numbers a template would do the job, and it would be simpler. I used Gemini on purpose, because I wanted to learn how to put an LLM into a business workflow without trusting it blindly. The quality gate is the real point of the project. In a bigger report, with more metrics and more context, a template stops being enough and the same gate still works.
+
+## Tested on
+
+Normal data, invalid dates, missing customer IDs, missing product IDs, negative revenue, duplicate orders, too little history for the baseline, a real anomaly, a wrong number from the AI, and a successful email delivery. I wanted to know it fails safely, not just that it runs.
+
+| What went wrong | What the workflow does |
 |---|---|
-| Invalid source data | Stop analysis and report data-quality issues |
-| Insufficient historical data | Stop anomaly analysis |
-| Unusual revenue movement | Flag for investigation |
-| Incorrect AI numbers | Block report publication |
-| Valid analysis + valid narrative | Deliver report |
+| Bad source data | Stops, sends a data-quality report |
+| Not enough history | Skips anomaly detection |
+| Unusual revenue | Flags it for a human |
+| Wrong number in the AI text | Blocks the report |
 
-**A good workflow should know when not to continue.**
+## Power BI
 
----
-
-## Who Would Use This?
-
-**Data Analysts** — Spend less time repeating weekly reporting steps and more time investigating changes.
-
-**Sales / Operations Managers** — Receive consistent performance and exception summaries.
-
-**Business Leadership** — Get a concise view of what changed and where attention may be required.
-
-**Analytics / BI Teams** — Adapt the workflow to different reporting processes while keeping validation and control points.
-
----
-
-## How Much Manual Work Does It Eliminate?
-
-I did not have a production baseline to claim a specific number of hours or percentage of time saved.
-
-Instead, the workflow automates the repeated sequence of:
-
-```text
-Data Collection
-→ Validation
-→ KPI Calculation
-→ Historical Comparison
-→ Anomaly Detection
-→ Report Drafting
-→ Numerical Verification
-→ Distribution
-```
-
-This removes repeated mechanical work from each reporting cycle, allowing the analyst to focus more on:
-
-**investigating → interpreting → deciding → communicating**
-
----
-
-## Human-in-the-Loop Design
-
-| Activity | Automated? | Human Role |
-|---|:---:|---|
-| Load data | Yes | — |
-| Validate records | Yes | Define validation rules |
-| Calculate KPIs | Yes | Define metrics |
-| Detect anomalies | Yes | Investigate cause |
-| Draft commentary | Yes | Review when necessary |
-| Verify reported numbers | Yes | — |
-| Explain business cause | No | **Required** |
-| Decide business action | No | **Required** |
-| Change reporting logic | No | **Required** |
-
-> **Automation should reduce repetitive work, not remove accountability.**
-
----
-
-## How Could This Adapt to Another Business?
-
-The architecture can be reused when the business problem changes.
-
-### Marketing
-
-```text
-Campaign Data → Validate → Calculate ROAS / Conversion
-→ Detect Unusual Performance → Summarize → Validate → Deliver
-```
-
-### Finance
-
-```text
-Financial Data → Validate → Calculate KPIs
-→ Historical Comparison → Flag Exceptions → Report → Deliver
-```
-
-### Customer Support
-
-```text
-Ticket Data → Validate → Calculate Volume / SLA Metrics
-→ Detect Spikes → Summarize → Escalate
-```
-
-The structure stays similar. The metrics, validation rules, thresholds, reporting frequency, and stakeholder requirements change.
-
----
-
-## Power BI Dashboard
-
-The same sales data is visualized in Power BI for interactive analysis.
-
-The dashboard includes:
-
-- Total Revenue
-- Total Orders
-- Revenue Growth
-- Weekly Revenue
-- Historical Average
-- Anomaly Status
+The same data sits in a Power BI dashboard: total revenue, orders, growth, weekly revenue, historical average and anomaly status.
 
 ![Power BI Dashboard](docs/images/powerbi-dashboard.png)
 
----
+## Stack
 
-## Technical Architecture
+n8n for orchestration, JavaScript for validation and analysis, Gemini API for the summary, Power BI for the dashboard, Docker for the local setup, SMTP for email.
 
-![Architecture](docs/images/architecture.png)
+## Run it yourself
 
-```text
-Sales Data
-    ↓
-Data Quality Checks
-    ↓
-Weekly KPI Analysis
-    ↓
-Historical Baseline + Anomaly Detection
-    ↓
-Gemini Narration
-    ↓
-Numeric Quality Gate
-    ↓
-Email Distribution
-```
+1. Start n8n with Docker.
+2. Import `workflow/n8n-workflow.json`.
+3. Add your Gemini API key and SMTP details in the credentials.
+4. Point the first node at `data/automated_reporting_sales.csv` and run it. Swap in `automated_reporting_sales_edge_cases.csv` to see the failures.
 
-### Tools
+## What's missing
 
-- **n8n** — workflow orchestration
-- **JavaScript** — validation and analytical logic
-- **Gemini API** — stakeholder-friendly narrative generation
-- **Power BI** — dashboard and visual analysis
-- **Docker** — local environment
-- **SMTP / Email** — report distribution
+This is a portfolio project, not a production system. It reads from a CSV, not a database. The z-score is built on about 11 weeks, with no seasonality or trend. Next I'd connect a real database, add a human approval step for high-impact reports, and log every run.
 
----
-
-## Testing
-
-The workflow was tested against both normal and failure scenarios:
-
-- Normal dataset
-- Invalid dates
-- Missing customer IDs
-- Negative revenue
-- Duplicate order IDs
-- Missing product IDs
-- Insufficient historical data
-- Anomaly detection
-- Incorrect AI-generated numbers
-- Successful email delivery
-
-The objective was to verify not only that the workflow **works**, but also that it **fails safely**.
-
----
-
-## Key Takeaway
-
-The most important part of this project was not learning how to connect nodes in n8n.
-
-It was learning how to think about automation as a **business process**.
-
-I learned to:
-
-- Identify repetitive work worth automating
-- Separate deterministic analysis from AI-generated communication
-- Define validation boundaries between workflow stages
-- Design explicit failure paths
-- Decide where human judgment is necessary
-- Treat anomalies as signals for investigation
-- Validate AI output before allowing it into a business-facing report
-- Design workflows that can adapt to different reporting problems
-
-> **The goal of automation is not to automate everything. It is to automate the right things, safely.**
-
----
-
-## Limitations & Future Improvements
-
-This is a portfolio implementation rather than a production reporting system.
-
-Potential next steps:
-
-- Connect directly to a production database instead of CSV
-- Add role-based report distribution
-- Improve semantic validation of AI-generated commentary
-- Add historical anomaly tracking
-- Add human approval for high-impact reports
-- Connect additional business data sources
-- Add production monitoring and execution logging
-
----
-
-## Project Structure
+## Files
 
 ```text
 automated-sales-reporting/
-│
-├── workflow/
-│   └── n8n-workflow.json
-│
+├── workflow/n8n-workflow.json
 ├── data/
 │   ├── automated_reporting_sales.csv
 │   └── automated_reporting_sales_edge_cases.csv
-│
-├── powerbi/
-│   └── dashboard.pbix
-│
-├── docs/
-│   └── images/
-│
+├── powerbi/dashboard.pbix
+├── docs/images/
 └── README.md
 ```
-
----
-
-## Project Philosophy
-
-**Don't let bad data enter the analysis.**
-
-**Don't let unverified analysis enter the narrative.**
-
-**Don't let unverified AI output reach the stakeholder.**
-
-<<<<<<< HEAD
-**And don't automate decisions that require human context.**
-=======
-**And don't automate decisions that require human context.**
->>>>>>> 5b4b18617800fb983ccecd7c64060606b284e671
